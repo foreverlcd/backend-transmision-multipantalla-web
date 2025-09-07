@@ -21,7 +21,7 @@ Backend para el sistema de transmisión multipantalla desarrollado con Node.js, 
 
 ### Paso 1: Clonar el repositorio
 ```bash
-git clone <url-del-repositorio>
+git clone https://github.com/foreverlcd/backend-transmision-multipantalla-web.git
 cd backend-transmision-multipantalla-web
 ```
 

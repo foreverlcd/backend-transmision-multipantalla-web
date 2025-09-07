@@ -81,6 +81,29 @@ io.on('connection', (socket) => {
     // Listar admins conectados
     const adminSockets = Array.from(io.sockets.adapter.rooms.get('admins') || []);
     console.log(`📊 Total admins conectados: ${adminSockets.length}`);
+    
+    // Enviar lista actual de participantes al admin recién conectado
+    const participantSockets = Array.from(io.sockets.adapter.rooms.get('participants') || []);
+    console.log(`📡 Enviando lista de ${participantSockets.length} participantes al admin`);
+    
+    const participantsList = [];
+    participantSockets.forEach(participantSocketId => {
+      const participantSocket = io.sockets.sockets.get(participantSocketId);
+      if (participantSocket && participantSocket.user) {
+        participantsList.push({
+          socketId: participantSocketId,
+          userData: {
+            id: participantSocket.user.userId || participantSocket.user.id,
+            email: participantSocket.user.email,
+            teamId: participantSocket.user.teamId
+          }
+        });
+      }
+    });
+    
+    // Enviar lista actual de participantes
+    socket.emit('participants-list', participantsList);
+    
   } else if (socket.user.role === 'PARTICIPANT') {
     socket.join('participants');
     console.log(`👤 Participante ${socket.user.email} unido a sala de participantes`);
@@ -113,9 +136,48 @@ io.on('connection', (socket) => {
     socket.to('admins').emit('user-joined', notificationData);
   });
 
+  // Cuando un participante confirma que tiene stream listo
+  socket.on('participant-stream-ready', (data) => {
+    console.log(`📺 Stream listo para participante: ${data.email} (${socket.id})`);
+    
+    // Notificar a todos los administradores que el participante tiene stream disponible
+    socket.to('admins').emit('participant-stream-available', {
+      socketId: socket.id,
+      userData: {
+        id: data.userId,
+        email: data.email,
+        teamId: data.teamId
+      }
+    });
+  });
+
+  // Cuando un participante deja de compartir pantalla
+  socket.on('participant-stopped-sharing', (data) => {
+    console.log(`📴 Participante ${data.email} (${socket.id}) detuvo la compartición`);
+    
+    // Notificar a todos los administradores que el participante ya no está transmitiendo
+    socket.to('admins').emit('participant-stopped-sharing', {
+      socketId: socket.id,
+      userData: {
+        id: data.userId,
+        email: data.email,
+        teamId: data.teamId
+      }
+    });
+  });
+
   // Cuando un admin quiere conectarse a un participante
   socket.on('admin-wants-to-connect', (data) => {
-    console.log(`Admin ${socket.user.email} quiere conectarse al participante ${data.participantSocketId}`);
+    console.log(`📞 Admin ${socket.user.email} (${socket.id}) quiere conectarse al participante ${data.participantSocketId}`);
+    
+    // Verificar que el participante existe
+    const participantSocket = io.sockets.sockets.get(data.participantSocketId);
+    if (!participantSocket) {
+      console.log(`❌ Participante ${data.participantSocketId} no encontrado`);
+      return;
+    }
+    
+    console.log(`✅ Enviando solicitud de conexión al participante ${data.participantSocketId}`);
     
     // Notificar al participante específico que un admin quiere conectarse
     socket.to(data.participantSocketId).emit('admin-wants-to-connect', {
@@ -125,24 +187,76 @@ io.on('connection', (socket) => {
 
   // Cuando un participante envía señal WebRTC al admin
   socket.on('sending-signal', (data) => {
-    console.log(`Señal WebRTC del participante ${socket.id} al admin ${data.adminSocketId}`);
+    console.log(`📡 Señal WebRTC del participante ${socket.user.email} (${socket.id}) al admin ${data.adminSocketId}`);
+    console.log(`📦 Tipo de señal:`, data.signal.type);
+    console.log(`📦 Tamaño de señal:`, JSON.stringify(data.signal).length, 'caracteres');
+    
+    // Verificar que el admin existe
+    const adminSocket = io.sockets.sockets.get(data.adminSocketId);
+    if (!adminSocket) {
+      console.log(`❌ Admin ${data.adminSocketId} no encontrado`);
+      return;
+    }
+    
+    console.log(`✅ Reenviando señal al admin ${data.adminSocketId}`);
     
     // Reenviar la señal al admin correspondiente
     socket.to(data.adminSocketId).emit('receiving-signal', {
       signal: data.signal,
       participantSocketId: socket.id
     });
+    
+    console.log(`📤 Señal enviada correctamente al admin`);
   });
 
   // Cuando un admin envía señal de respuesta al participante
   socket.on('returning-signal', (data) => {
-    console.log(`Señal de respuesta del admin ${socket.id} al participante ${data.participantSocketId}`);
+    console.log(`📡 Señal de respuesta del admin ${socket.user.email} (${socket.id}) al participante ${data.participantSocketId}`);
+    console.log(`📦 Tipo de señal:`, data.signal.type);
+    console.log(`📦 Tamaño de señal:`, JSON.stringify(data.signal).length, 'caracteres');
+    
+    // Verificar que el participante existe
+    const participantSocket = io.sockets.sockets.get(data.participantSocketId);
+    if (!participantSocket) {
+      console.log(`❌ Participante ${data.participantSocketId} no encontrado`);
+      return;
+    }
+    
+    console.log(`✅ Reenviando señal de respuesta al participante ${data.participantSocketId}`);
     
     // Reenviar la señal al participante correspondiente
     socket.to(data.participantSocketId).emit('return-signal-received', {
       signal: data.signal,
       adminSocketId: socket.id
     });
+    
+    console.log(`📤 Señal de respuesta enviada correctamente al participante`);
+  });
+
+  // Cuando un admin solicita la lista actualizada de participantes
+  socket.on('request-participants-list', () => {
+    console.log(`🔄 Admin ${socket.user.email} solicita lista actualizada de participantes`);
+    
+    const participantSockets = Array.from(io.sockets.adapter.rooms.get('participants') || []);
+    console.log(`📡 Enviando lista actualizada de ${participantSockets.length} participantes`);
+    
+    const participantsList = [];
+    participantSockets.forEach(participantSocketId => {
+      const participantSocket = io.sockets.sockets.get(participantSocketId);
+      if (participantSocket && participantSocket.user) {
+        participantsList.push({
+          socketId: participantSocketId,
+          userData: {
+            id: participantSocket.user.userId || participantSocket.user.id,
+            email: participantSocket.user.email,
+            teamId: participantSocket.user.teamId
+          }
+        });
+      }
+    });
+    
+    // Enviar lista actualizada
+    socket.emit('participants-list', participantsList);
   });
 
   
