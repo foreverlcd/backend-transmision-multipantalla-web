@@ -10,6 +10,7 @@
     "build": "npx prisma generate && npx prisma migrate deploy",
     "migrate": "prisma migrate dev",
     "seed": "node prisma/seed.js",
+    "postinstall": "npx prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "node prisma/seed.js",

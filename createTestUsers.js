@@ -5,6 +5,14 @@ const prisma = new PrismaClient();
 
 async function createTestUsers() {
   try {
+    console.log('🌱 Iniciando creación de usuarios de prueba...');
+    
+    // Verificar si ya existen usuarios
+    const existingUsers = await prisma.user.count();
+    if (existingUsers > 0) {
+      console.log('👥 Usuarios ya existen, saltando creación inicial');
+      return;
+    }
     // Crear categoría de prueba
     const category = await prisma.category.upsert({
       where: { id: 1 },

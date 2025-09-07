@@ -1,0 +1,11 @@
+[phases.install]
+cmd = "npm ci"
+
+[phases.build]
+cmd = "npm install"
+
+[phases.start]
+cmd = "npx prisma generate && npx prisma migrate deploy && npm run seed && npm start"
+
+[variables]
+NODE_ENV = "production"
