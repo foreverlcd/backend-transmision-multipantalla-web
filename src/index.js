@@ -19,11 +19,7 @@ const server = createServer(app);
 // Configurar Socket.IO con CORS
 const io = new Server(server, {
   cors: {
-    origin: [
-      process.env.FRONTEND_URL || "http://localhost:3000",
-      "https://tu-frontend.vercel.app", // Cambia esto por tu URL de Vercel
-      "http://localhost:3000"
-    ],
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
     methods: ["GET", "POST"],
     credentials: true
   }
@@ -58,11 +54,7 @@ io.use((socket, next) => {
 
 // Middleware
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || "http://localhost:3000",
-    "https://tu-frontend.vercel.app", // Cambia esto por tu URL de Vercel
-    "http://localhost:3000"
-  ],
+  origin: process.env.FRONTEND_URL || "http://localhost:3000",
   credentials: true
 }));
 app.use(express.json());
