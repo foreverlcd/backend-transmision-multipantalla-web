@@ -41,9 +41,6 @@ router.post('/login', async (req, res) => {
     if (!isPasswordValid) {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
     
     // Login exitoso - Generar token JWT
     const payload = {
