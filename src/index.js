@@ -5,7 +5,14 @@ const dotenv = require('dotenv');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
+const { PrismaClient } = require('@prisma/client');
 const authRoutes = require('./api/auth');
+
+// Inicializar Prisma
+const prisma = new PrismaClient();
+
+// Mapa global para trackear participantes con streams disponibles
+const participantsWithStreams = new Map();
 
 // Cargar variables de entorno
 dotenv.config();
@@ -26,7 +33,7 @@ const io = new Server(server, {
 });
 
 // Middleware de autenticación para Socket.IO
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
     // Extraer el token JWT del handshake
     const token = socket.handshake.auth.token;
@@ -38,10 +45,33 @@ io.use((socket, next) => {
     // Verificar el token con jwt.verify
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     
-    // Añadir los datos del usuario al objeto socket
-    socket.user = payload;
+    // Obtener información completa del usuario desde la base de datos
+    const user = await prisma.user.findUnique({
+      where: { id: payload.id },
+      include: {
+        team: {
+          include: {
+            category: true
+          }
+        }
+      }
+    });
     
-    console.log(`Usuario autenticado: ${payload.email} (${payload.role})`);
+    if (!user) {
+      return next(new Error('Authentication error: User not found'));
+    }
+    
+    // Añadir los datos completos del usuario al objeto socket
+    socket.user = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      teamId: user.teamId,
+      categoryId: user.team?.categoryId || null,
+      categoryName: user.team?.category?.name || null
+    };
+    
+    console.log(`Usuario autenticado: ${user.email} (${user.role}) - Equipo: ${user.teamId}, Categoría: ${socket.user.categoryId}`);
     
     // Continuar con la conexión
     next();
@@ -89,17 +119,24 @@ io.on('connection', (socket) => {
     // Enviar lista actual de participantes al admin recién conectado
     const participantSockets = Array.from(io.sockets.adapter.rooms.get('participants') || []);
     console.log(`📡 Enviando lista de ${participantSockets.length} participantes al admin`);
+    console.log(`📊 Participantes con streams disponibles: ${participantsWithStreams.size}`);
     
     const participantsList = [];
     participantSockets.forEach(participantSocketId => {
       const participantSocket = io.sockets.sockets.get(participantSocketId);
       if (participantSocket && participantSocket.user) {
+        const hasStream = participantsWithStreams.has(participantSocketId);
+        console.log(`👤 Participante ${participantSocket.user.email}: stream disponible = ${hasStream}`);
+        
         participantsList.push({
           socketId: participantSocketId,
           userData: {
-            id: participantSocket.user.userId || participantSocket.user.id,
+            id: participantSocket.user.id,
             email: participantSocket.user.email,
-            teamId: participantSocket.user.teamId
+            teamId: participantSocket.user.teamId,
+            categoryId: participantSocket.user.categoryId,
+            categoryName: participantSocket.user.categoryName,
+            streamAvailable: hasStream
           }
         });
       }
@@ -142,30 +179,61 @@ io.on('connection', (socket) => {
 
   // Cuando un participante confirma que tiene stream listo
   socket.on('participant-stream-ready', (data) => {
-    console.log(`📺 Stream listo para participante: ${data.email} (${socket.id})`);
+    console.log(`📺 Stream listo para participante: ${socket.user.email} (${socket.id})`);
+    console.log(`📋 Datos recibidos:`, data);
     
-    // Notificar a todos los administradores que el participante tiene stream disponible
-    socket.to('admins').emit('participant-stream-available', {
+    // Marcar participante como teniendo stream disponible
+    participantsWithStreams.set(socket.id, {
       socketId: socket.id,
       userData: {
-        id: data.userId,
-        email: data.email,
-        teamId: data.teamId
-      }
+        id: socket.user.id,
+        email: socket.user.email,
+        teamId: socket.user.teamId,
+        categoryId: socket.user.categoryId,
+        categoryName: socket.user.categoryName
+      },
+      timestamp: new Date()
     });
+    
+    console.log(`✅ Participante ${socket.user.email} marcado con stream disponible`);
+    console.log(`📊 Total participantes con streams: ${participantsWithStreams.size}`);
+    
+    // Notificar a todos los administradores que el participante tiene stream disponible
+    const streamData = {
+      socketId: socket.id,
+      userData: {
+        id: socket.user.id,
+        email: socket.user.email,
+        teamId: socket.user.teamId,
+        categoryId: socket.user.categoryId,
+        categoryName: socket.user.categoryName
+      }
+    };
+    
+    console.log(`📡 Enviando participant-stream-available a todos los admins:`, streamData);
+    socket.to('admins').emit('participant-stream-available', streamData);
   });
 
   // Cuando un participante deja de compartir pantalla
   socket.on('participant-stopped-sharing', (data) => {
-    console.log(`📴 Participante ${data.email} (${socket.id}) detuvo la compartición`);
+    console.log(`📴 Participante ${socket.user.email} (${socket.id}) detuvo la compartición`);
+    
+    // Remover participante del mapa de streams disponibles
+    if (participantsWithStreams.has(socket.id)) {
+      participantsWithStreams.delete(socket.id);
+      console.log(`✅ Participante ${socket.user.email} removido del mapa de streams`);
+      console.log(`📊 Total participantes con streams: ${participantsWithStreams.size}`);
+    }
     
     // Notificar a todos los administradores que el participante ya no está transmitiendo
     socket.to('admins').emit('participant-stopped-sharing', {
       socketId: socket.id,
       userData: {
-        id: data.userId,
-        email: data.email,
-        teamId: data.teamId
+        id: socket.user.id,
+        email: socket.user.email,
+        teamId: socket.user.teamId,
+        categoryId: socket.user.categoryId,
+        categoryName: socket.user.categoryName
       }
     });
   });
@@ -243,17 +311,24 @@ io.on('connection', (socket) => {
     
     const participantSockets = Array.from(io.sockets.adapter.rooms.get('participants') || []);
     console.log(`📡 Enviando lista actualizada de ${participantSockets.length} participantes`);
+    console.log(`📊 Participantes con streams disponibles: ${participantsWithStreams.size}`);
     
     const participantsList = [];
     participantSockets.forEach(participantSocketId => {
       const participantSocket = io.sockets.sockets.get(participantSocketId);
       if (participantSocket && participantSocket.user) {
+        const hasStream = participantsWithStreams.has(participantSocketId);
+        console.log(`👤 Participante ${participantSocket.user.email}: stream disponible = ${hasStream}`);
+        
         participantsList.push({
           socketId: participantSocketId,
           userData: {
-            id: participantSocket.user.userId || participantSocket.user.id,
+            id: participantSocket.user.id,
             email: participantSocket.user.email,
-            teamId: participantSocket.user.teamId
+            teamId: participantSocket.user.teamId,
+            categoryId: participantSocket.user.categoryId,
+            categoryName: participantSocket.user.categoryName,
+            streamAvailable: hasStream
           }
         });
       }
@@ -261,11 +336,19 @@ io.on('connection', (socket) => {
     
     // Enviar lista actualizada
     socket.emit('participants-list', participantsList);
+    console.log(`✅ Lista enviada con ${participantsList.length} participantes`);
   });
 
   
   socket.on('disconnect', () => {
     console.log(`👋 Usuario desconectado: ${socket.user.email} (ID: ${socket.id})`);
+    
+    // Limpiar del mapa de streams si es participante
+    if (participantsWithStreams.has(socket.id)) {
+      participantsWithStreams.delete(socket.id);
+      console.log(`🗑️ Participante ${socket.user.email} removido del mapa de streams por desconexión`);
+      console.log(`📊 Total participantes con streams: ${participantsWithStreams.size}`);
+    }
     
     // Notificar a los admins si un participante se desconecta
     if (socket.user.role === 'PARTICIPANT') {
