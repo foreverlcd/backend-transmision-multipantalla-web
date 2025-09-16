@@ -1,7 +1,6 @@
-require('dotenv').config(); // 👈 debe ir arriba de todo
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
@@ -13,9 +12,6 @@ const prisma = new PrismaClient();
 
 // Mapa global para trackear participantes con streams disponibles
 const participantsWithStreams = new Map();
-
-// Cargar variables de entorno
-dotenv.config();
 
 // Crear la aplicación Express
 const app = express();
@@ -71,27 +67,27 @@ io.use(async (socket, next) => {
       categoryName: user.team?.category?.name || null
     };
     
-    console.log(`Usuario autenticado: ${user.email} (${user.role}) - Equipo: ${user.teamId}, Categoría: ${socket.user.categoryId}`);
+    console.log(`✅ Usuario autenticado: ${user.email} (${user.role}) - Equipo: ${user.teamId}, Categoría: ${socket.user.categoryId}`);
     
     // Continuar con la conexión
     next();
     
   } catch (error) {
-    console.error('Error de autenticación en Socket.IO:', error);
+    console.error('❌ Error de autenticación en Socket.IO:', error);
     next(new Error('Authentication error: Invalid token'));
   }
 });
 
-// Middleware
+// Middleware Express
 app.use(cors({
-  origin: process.env.FRONTEND_URL,
+  origin: process.env.FRONTEND_URL || "http://localhost:3000",
   credentials: true
 }));
 app.use(express.json());
 
-// Middleware de logging para debug
+// Middleware de logging simple
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.path} - Body:`, req.body);
+  console.log(`📡 ${req.method} ${req.path}`);
   next();
 });
 
@@ -112,21 +108,15 @@ io.on('connection', (socket) => {
     socket.join('admins');
     console.log(`👑 Admin ${socket.user.email} unido a sala de administradores`);
     
-    // Listar admins conectados
-    const adminSockets = Array.from(io.sockets.adapter.rooms.get('admins') || []);
-    console.log(`📊 Total admins conectados: ${adminSockets.length}`);
-    
     // Enviar lista actual de participantes al admin recién conectado
     const participantSockets = Array.from(io.sockets.adapter.rooms.get('participants') || []);
     console.log(`📡 Enviando lista de ${participantSockets.length} participantes al admin`);
-    console.log(`📊 Participantes con streams disponibles: ${participantsWithStreams.size}`);
     
     const participantsList = [];
     participantSockets.forEach(participantSocketId => {
       const participantSocket = io.sockets.sockets.get(participantSocketId);
       if (participantSocket && participantSocket.user) {
         const hasStream = participantsWithStreams.has(participantSocketId);
-        console.log(`👤 Participante ${participantSocket.user.email}: stream disponible = ${hasStream}`);
         
         participantsList.push({
           socketId: participantSocketId,
@@ -148,20 +138,11 @@ io.on('connection', (socket) => {
   } else if (socket.user.role === 'PARTICIPANT') {
     socket.join('participants');
     console.log(`👤 Participante ${socket.user.email} unido a sala de participantes`);
-    
-    // Listar participantes conectados
-    const participantSockets = Array.from(io.sockets.adapter.rooms.get('participants') || []);
-    console.log(`📊 Total participantes conectados: ${participantSockets.length}`);
   }
   
   // Cuando un participante está listo para compartir pantalla
   socket.on('participant-ready', (data) => {
     console.log(`🎬 Participante listo: ${data.email} (${socket.id})`);
-    console.log(`📊 Datos del participante:`, JSON.stringify(data, null, 2));
-    
-    // Verificar cuántos admins hay conectados
-    const adminSockets = Array.from(io.sockets.adapter.rooms.get('admins') || []);
-    console.log(`📡 Notificando a ${adminSockets.length} administradores`);
     
     // Notificar a todos los administradores que hay un nuevo participante disponible
     const notificationData = {
@@ -169,18 +150,18 @@ io.on('connection', (socket) => {
       userData: {
         id: data.userId,
         email: data.email,
-        teamId: data.teamId
+        teamId: data.teamId,
+        categoryId: socket.user.categoryId,
+        categoryName: socket.user.categoryName
       }
     };
     
-    console.log(`📤 Enviando user-joined:`, JSON.stringify(notificationData, null, 2));
-    socket.to('admins').emit('user-joined', notificationData);
+    socket.broadcast.to('admins').emit('user-joined', notificationData);
   });
 
   // Cuando un participante confirma que tiene stream listo
   socket.on('participant-stream-ready', (data) => {
     console.log(`📺 Stream listo para participante: ${socket.user.email} (${socket.id})`);
-    console.log(`📋 Datos recibidos:`, data);
     
     // Marcar participante como teniendo stream disponible
     participantsWithStreams.set(socket.id, {
@@ -210,8 +191,7 @@ io.on('connection', (socket) => {
       }
     };
     
-    console.log(`📡 Enviando participant-stream-available a todos los admins:`, streamData);
-    socket.to('admins').emit('participant-stream-available', streamData);
+    socket.broadcast.to('admins').emit('participant-stream-available', streamData);
   });
 
   // Cuando un participante deja de compartir pantalla
@@ -222,11 +202,10 @@ io.on('connection', (socket) => {
     if (participantsWithStreams.has(socket.id)) {
       participantsWithStreams.delete(socket.id);
       console.log(`✅ Participante ${socket.user.email} removido del mapa de streams`);
-      console.log(`📊 Total participantes con streams: ${participantsWithStreams.size}`);
     }
     
-    // Notificar a todos los administradores que el participante ya no está transmitiendo
-    socket.to('admins').emit('participant-stopped-sharing', {
+    // Notificar a todos los administradores
+    socket.broadcast.to('admins').emit('participant-stopped-sharing', {
       socketId: socket.id,
       userData: {
         id: socket.user.id,
@@ -260,8 +239,6 @@ io.on('connection', (socket) => {
   // Cuando un participante envía señal WebRTC al admin
   socket.on('sending-signal', (data) => {
     console.log(`📡 Señal WebRTC del participante ${socket.user.email} (${socket.id}) al admin ${data.adminSocketId}`);
-    console.log(`📦 Tipo de señal:`, data.signal.type);
-    console.log(`📦 Tamaño de señal:`, JSON.stringify(data.signal).length, 'caracteres');
     
     // Verificar que el admin existe
     const adminSocket = io.sockets.sockets.get(data.adminSocketId);
@@ -270,22 +247,16 @@ io.on('connection', (socket) => {
       return;
     }
     
-    console.log(`✅ Reenviando señal al admin ${data.adminSocketId}`);
-    
     // Reenviar la señal al admin correspondiente
     socket.to(data.adminSocketId).emit('receiving-signal', {
       signal: data.signal,
       participantSocketId: socket.id
     });
-    
-    console.log(`📤 Señal enviada correctamente al admin`);
   });
 
   // Cuando un admin envía señal de respuesta al participante
   socket.on('returning-signal', (data) => {
     console.log(`📡 Señal de respuesta del admin ${socket.user.email} (${socket.id}) al participante ${data.participantSocketId}`);
-    console.log(`📦 Tipo de señal:`, data.signal.type);
-    console.log(`📦 Tamaño de señal:`, JSON.stringify(data.signal).length, 'caracteres');
     
     // Verificar que el participante existe
     const participantSocket = io.sockets.sockets.get(data.participantSocketId);
@@ -294,15 +265,11 @@ io.on('connection', (socket) => {
       return;
     }
     
-    console.log(`✅ Reenviando señal de respuesta al participante ${data.participantSocketId}`);
-    
     // Reenviar la señal al participante correspondiente
     socket.to(data.participantSocketId).emit('return-signal-received', {
       signal: data.signal,
       adminSocketId: socket.id
     });
-    
-    console.log(`📤 Señal de respuesta enviada correctamente al participante`);
   });
 
   // Cuando un admin solicita la lista actualizada de participantes
@@ -310,15 +277,12 @@ io.on('connection', (socket) => {
     console.log(`🔄 Admin ${socket.user.email} solicita lista actualizada de participantes`);
     
     const participantSockets = Array.from(io.sockets.adapter.rooms.get('participants') || []);
-    console.log(`📡 Enviando lista actualizada de ${participantSockets.length} participantes`);
-    console.log(`📊 Participantes con streams disponibles: ${participantsWithStreams.size}`);
     
     const participantsList = [];
     participantSockets.forEach(participantSocketId => {
       const participantSocket = io.sockets.sockets.get(participantSocketId);
       if (participantSocket && participantSocket.user) {
         const hasStream = participantsWithStreams.has(participantSocketId);
-        console.log(`👤 Participante ${participantSocket.user.email}: stream disponible = ${hasStream}`);
         
         participantsList.push({
           socketId: participantSocketId,
@@ -336,9 +300,14 @@ io.on('connection', (socket) => {
     
     // Enviar lista actualizada
     socket.emit('participants-list', participantsList);
-    console.log(`✅ Lista enviada con ${participantsList.length} participantes`);
   });
 
+  // Cuando un admin deja de observar un participante
+  socket.on('admin-stop-observing', (data) => {
+    console.log(`🛑 Admin ${socket.user.email} deja de observar participante ${data.participantSocketId}`);
+    // No necesitamos hacer nada especial en el backend para esto
+    // El frontend maneja la limpieza de las conexiones WebRTC
+  });
   
   socket.on('disconnect', () => {
     console.log(`👋 Usuario desconectado: ${socket.user.email} (ID: ${socket.id})`);
@@ -347,13 +316,11 @@ io.on('connection', (socket) => {
     if (participantsWithStreams.has(socket.id)) {
       participantsWithStreams.delete(socket.id);
       console.log(`🗑️ Participante ${socket.user.email} removido del mapa de streams por desconexión`);
-      console.log(`📊 Total participantes con streams: ${participantsWithStreams.size}`);
     }
     
     // Notificar a los admins si un participante se desconecta
     if (socket.user.role === 'PARTICIPANT') {
-      console.log(`📤 Notificando desconexión de participante a admins`);
-      socket.to('admins').emit('user-left', {
+      socket.broadcast.to('admins').emit('user-left', {
         socketId: socket.id
       });
     }
@@ -363,7 +330,19 @@ io.on('connection', (socket) => {
 // Puerto del servidor
 const PORT = process.env.PORT || 3001;
 
-// Iniciar el servidor HTTP (no solo Express)
+// Iniciar el servidor HTTP
 server.listen(PORT, () => {
-  console.log(`Servidor ejecutándose en puerto ${PORT}`);
+  console.log(`🚀 Servidor ejecutándose en puerto ${PORT}`);
+  console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || "http://localhost:3000"}`);
+  console.log(`🔑 JWT Secret configurado: ${!!process.env.JWT_SECRET}`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('🛑 Cerrando servidor...');
+  await prisma.$disconnect();
+  server.close(() => {
+    console.log('✅ Servidor cerrado');
+    process.exit(0);
+  });
 });
